@@ -61,8 +61,6 @@ public class TerrainMapGenerator : MonoBehaviour {
     Queue<HeightMapThreadInfo> heightMapDataThreadInfoQueue = new Queue<HeightMapThreadInfo>();
     Queue<MeshDataThreadInfo> meshDataThreadInfoQueue = new Queue<MeshDataThreadInfo>();
 
-    List<Vector2Int> paths = null;
-
 #if UNITY_EDITOR
     void OnEnable() {
         EditorApplication.update += Update;
@@ -74,16 +72,6 @@ public class TerrainMapGenerator : MonoBehaviour {
 #endif
 
     void Start() {
-        //填充路径,生成从(0,0)到(240,240)
-        paths = new List<Vector2Int>();
-        for (int i = 0; i < 241; i++) {
-            paths.Add(new Vector2Int(i, i));
-        }
-        //从(0, 240)到(240, 0)
-        for (int i = 0; i < 241; i++) {
-            paths.Add(new Vector2Int(i, 240 - i));
-        }
-
         // Get all Terrain Chunks
         foreach (Transform child in transform) {
             Vector2 position = new Vector2(child.position.x / chunkWidth, child.position.z / chunkWidth);
@@ -140,8 +128,7 @@ public class TerrainMapGenerator : MonoBehaviour {
         }
     }
 
-    Dictionary<long, bool> path_dirty = new Dictionary<long, bool>();
-    void PostProcessPath(float[,] heightMap, int x, int y, float value)
+    void PostProcessPath(float[,] heightMap, int x, int y, float value, Dictionary<long, bool> paths)
     {
         int width = heightMap.GetLength(0);
         int height = heightMap.GetLength(1);
@@ -149,7 +136,6 @@ public class TerrainMapGenerator : MonoBehaviour {
         {
             return;
         }
-        path_dirty[x * width + y] = true;
         int offset = (int)(heightMap[x, y] - value);
         heightMap[x, y] = value;
 
@@ -165,7 +151,7 @@ public class TerrainMapGenerator : MonoBehaviour {
                 {
                     continue;
                 }
-                if(path_dirty.ContainsKey(nx * width + ny))
+                if(paths.ContainsKey(nx * width + ny))
                 {
                     continue;
                 }
@@ -190,13 +176,21 @@ public class TerrainMapGenerator : MonoBehaviour {
         }
     }
 
-    void PostProcessHeightMap(HeightMapThreadInfo info)
+    void PostProcessHeightMap(HeightMapThreadInfo info, Dictionary<long, bool> paths)
     {
-        float[,] heightMap = info.heightMap;
-        for(int i = 0; i < paths.Count; i ++)
+        if(paths == null || paths.Count == 0)
         {
-            Vector2Int point = paths[i];
-            PostProcessPath(heightMap, point.x, point.y, 0);
+            return;
+        }
+
+        float[,] heightMap = info.heightMap;
+        int width = heightMap.GetLength(0);
+        int height = heightMap.GetLength(1);
+        var iter = paths.GetEnumerator();
+        while(iter.MoveNext())
+        {
+            long key = iter.Current.Key;
+            PostProcessPath(heightMap, (int)(key / width), (int)(key % width), 0, paths);
         }
     }
 
@@ -205,7 +199,7 @@ public class TerrainMapGenerator : MonoBehaviour {
         if (heightMapDataThreadInfoQueue.Count > 0) {
             for (int i = 0; i < heightMapDataThreadInfoQueue.Count; i++) {
                 HeightMapThreadInfo info = heightMapDataThreadInfoQueue.Dequeue();
-                PostProcessHeightMap(info);
+                PostProcessHeightMap(info, null);
                 MeshGenerator.RequestMeshData(info.position, info.heightMap, levelOfDetail, OnTerrainMeshDataReceived, terrainColourGradient);
             }
         }
@@ -320,19 +314,19 @@ public class TerrainMapGenerator : MonoBehaviour {
                     terrainChunks.Add(pos, chunk);
                 }
 
-                RequestTerrainChunk(pos, loadAllObjects);
+                RequestTerrainChunk(pos, chunkWidth + 200, chunkWidth);
             }
         }
     }
 
-    void RequestTerrainChunk(Vector2 position, bool loadAllObjects) {
-        heightMapGenerator.RequestHeightMapData(seed, chunkWidth, position, OnHeightMapDataReceived);
+    void RequestTerrainChunk(Vector2 position, int mapWidth, int mapHeight) {
+        heightMapGenerator.RequestHeightMapData(seed, mapWidth, mapHeight, position, OnHeightMapDataReceived);
 
         if (createWater) {
-            float[,] heightMap = new float[chunkWidth, chunkWidth];
+            float[,] heightMap = new float[mapWidth, mapHeight];
 
-            for (int z = 0; z < chunkWidth; z++) {
-                for (int x = 0; x < chunkWidth; x++) {
+            for (int z = 0; z < mapHeight; z++) {
+                for (int x = 0; x < mapWidth; x++) {
                     heightMap[x, z] = waterLevel;
                 }
             }

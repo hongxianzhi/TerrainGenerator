@@ -56,8 +56,8 @@ public class ForestGenerator : MonoBehaviour {
 
         // Get area of land above water level (number of vertices)
         int areaAboveWater = 0;
-        for (int z = 0; z < height; z++) {
-            for (int x = 0; x < width; x++) {
+        for (int z = 0; z < width; z++) {
+            for (int x = 0; x < height; x++) {
                 if (heightMap[z, x] > waterLevel) {
                     areaAboveWater++;
                 }

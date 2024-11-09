@@ -37,7 +37,7 @@ public class HeightMapGenerator : MonoBehaviour {
 
     HydraulicErosion hydraulicErosion;
 
-    const int maxWidth = 256;
+    const int maxWidth = 1024;
 
     float biomeNoiseScale;
     float biomeDepth;
@@ -55,29 +55,29 @@ public class HeightMapGenerator : MonoBehaviour {
         }
     }
 
-    public void RequestHeightMapData(int seed, int mapWidth, Vector2 position, Action<Vector2, float[,]> callback) {
+    public void RequestHeightMapData(int seed, int mapWidth, int mapHeight, Vector2 position, Action<Vector2, float[,]> callback) {
         ThreadStart threadStart = delegate {
-            HeightMapDataThread(seed, mapWidth, position, callback);
+            HeightMapDataThread(seed, mapWidth, mapHeight, position, callback);
         };
 
         new Thread(threadStart).Start();
     }
 
-    void HeightMapDataThread(int seed, int mapWidth, Vector2 position, Action<Vector2, float[,]> callback) {
+    void HeightMapDataThread(int seed, int mapWidth, int mapHeight, Vector2 position, Action<Vector2, float[,]> callback) {
         int mapOffsetX = (int)(position.x * (mapWidth - 1)) + seed;
-        int mapOffsetY = (int)(position.y * (mapWidth - 1)) + seed;
+        int mapOffsetY = (int)(position.y * (mapHeight - 1)) + seed;
 
-        float[,] heightMap = CreateHeightMap(seed, mapWidth, mapOffsetX, mapOffsetY);
+        float[,] heightMap = CreateHeightMap(seed, mapWidth, mapHeight, mapOffsetX, mapOffsetY);
 
         callback(position, heightMap);
     }
 
-    float[,] CreateHeightMap(int seed, int mapWidth, int offsetX, int offsetY) {
+    float[,] CreateHeightMap(int seed, int mapWidth, int mapHeight, int offsetX, int offsetY) {
         Noise.CreateNewSimplexNoiseGenerator(seed);
 
-        float[,] heightMap = new float[mapWidth, mapWidth];
+        float[,] heightMap = new float[mapWidth, mapHeight];
         // Initialize height map values
-        for (int z = 0; z < mapWidth; z++) {
+        for (int z = 0; z < mapHeight; z++) {
             for (int x = 0; x < mapWidth; x++) {
                 heightMap[x, z] = 0f;
             }
@@ -86,11 +86,11 @@ public class HeightMapGenerator : MonoBehaviour {
         // Add each height map layer together
         float totalMapDepth = 0f;
         foreach (HeightMapSettings settings in heightMapSettingsList) {
-            float[,] layer = CreateHeightMapLayer(settings, seed, mapWidth, offsetX, offsetY);
+            float[,] layer = CreateHeightMapLayer(settings, seed, mapWidth, mapHeight, offsetX, offsetY);
             totalMapDepth += settings.mapDepth;
 
             // Determine map depth
-            for (int z = 0; z < mapWidth; z++) {
+            for (int z = 0; z < mapHeight; z++) {
                 for (int x = 0; x < mapWidth; x++) {
                     heightMap[x, z] += layer[x, z];
                 }
@@ -101,7 +101,7 @@ public class HeightMapGenerator : MonoBehaviour {
         float averageMapDepthDifference = Mathf.Abs(actualAverageMapDepth - averageMapDepth);
 
         // Adjust map depth to obtain targeted average map depth
-        for (int z = 0; z < mapWidth; z++) {
+        for (int z = 0; z < mapHeight; z++) {
             for (int x = 0; x < mapWidth; x++) {
                 heightMap[x, z] -= averageMapDepthDifference;
             }
@@ -110,8 +110,8 @@ public class HeightMapGenerator : MonoBehaviour {
         return heightMap;
     }
 
-    float[,] CreateHeightMapLayer(HeightMapSettings settings, int seed, int mapWidth, int offsetX, int offsetY) {
-        float widthFactor = (float)mapWidth / (float)maxWidth;
+    float[,] CreateHeightMapLayer(HeightMapSettings settings, int seed, int mapWidth, int mapHeight, int offsetX, int offsetY) {
+        float widthFactor = (float)mapWidth / (float)mapHeight;
         float[,] noiseMap = Noise.GenerateNoiseMap(
             settings.noiseType,
             mapWidth,
@@ -127,7 +127,7 @@ public class HeightMapGenerator : MonoBehaviour {
 
         float[,] falloffMap = null;
         if (settings.useFalloff) {
-            falloffMap = Falloff.GenerateFalloffMap(mapWidth, mapWidth);
+            falloffMap = Falloff.GenerateFalloffMap(mapWidth, mapHeight);
         }
 
         bool useHydraulicErosion = hydraulicErosion.settings.useHydraulicErosion;
@@ -135,10 +135,10 @@ public class HeightMapGenerator : MonoBehaviour {
             noiseMap = hydraulicErosion.ErodeTerrain(noiseMap, seed);
         }
 
-        float[,] heightMap = new float[mapWidth, mapWidth];
+        float[,] heightMap = new float[mapWidth, mapHeight];
 
         // Determine map depth
-        for (int z = 0; z < mapWidth; z++) {
+        for (int z = 0; z < mapHeight; z++) {
             for (int x = 0; x < mapWidth; x++) {
                 if (settings.useFalloff && settings.mapDepth > 0) {
                     noiseMap[x, z] = Mathf.Clamp01(noiseMap[x, z] - falloffMap[x, z]);
