@@ -4,6 +4,7 @@ using System.Threading;
 using System;
 using UnityEngine;
 using UnityEditor;
+using Unity.Mathematics;
 
 [ExecuteInEditMode]
 public class TerrainMapGenerator : MonoBehaviour {
@@ -60,6 +61,9 @@ public class TerrainMapGenerator : MonoBehaviour {
     Queue<HeightMapThreadInfo> heightMapDataThreadInfoQueue = new Queue<HeightMapThreadInfo>();
     Queue<MeshDataThreadInfo> meshDataThreadInfoQueue = new Queue<MeshDataThreadInfo>();
 
+    List<Vector2Int> paths = null;
+
+#if UNITY_EDITOR
     void OnEnable() {
         EditorApplication.update += Update;
     }
@@ -67,8 +71,19 @@ public class TerrainMapGenerator : MonoBehaviour {
     void OnDisable() {
         EditorApplication.update -= Update;
     }
+#endif
 
     void Start() {
+        //填充路径,生成从(0,0)到(240,240)
+        paths = new List<Vector2Int>();
+        for (int i = 0; i < 241; i++) {
+            paths.Add(new Vector2Int(i, i));
+        }
+        //从(0, 240)到(240, 0)
+        for (int i = 0; i < 241; i++) {
+            paths.Add(new Vector2Int(i, 240 - i));
+        }
+
         // Get all Terrain Chunks
         foreach (Transform child in transform) {
             Vector2 position = new Vector2(child.position.x / chunkWidth, child.position.z / chunkWidth);
@@ -125,11 +140,72 @@ public class TerrainMapGenerator : MonoBehaviour {
         }
     }
 
+    Dictionary<long, bool> path_dirty = new Dictionary<long, bool>();
+    void PostProcessPath(float[,] heightMap, int x, int y, float value)
+    {
+        int width = heightMap.GetLength(0);
+        int height = heightMap.GetLength(1);
+        if(x < 0 || x >= width || y < 0 || y >= height)
+        {
+            return;
+        }
+        path_dirty[x * width + y] = true;
+        int offset = (int)(heightMap[x, y] - value);
+        heightMap[x, y] = value;
+
+        //以x,y为中心，向周围扩展offset个单位，采样并设置高度
+        int sample = 3;
+        for(int i = -offset; i <= offset; i++)
+        {
+            for(int j = -offset; j <= offset; j++)
+            {
+                int nx = x + i;
+                int ny = y + j;
+                if(nx < 0 || nx >= width || ny < 0 || ny >= height)
+                {
+                    continue;
+                }
+                if(path_dirty.ContainsKey(nx * width + ny))
+                {
+                    continue;
+                }
+                float h = 0;
+                int cnt = 0;
+                for(int k = -sample; k <= sample; k++)
+                {
+                    for(int l = -sample; l <= sample; l++)
+                    {
+                        int nnx = nx + k;
+                        int nny = ny + l;
+                        if(nnx < 0 || nnx >= width || nny < 0 || nny >= height)
+                        {
+                            continue;
+                        }
+                        h += heightMap[nnx, nny];
+                        cnt++;
+                    }
+                }
+                heightMap[nx, ny] = Mathf.Lerp(heightMap[nx, ny], h / cnt, 0.5f);
+            }
+        }
+    }
+
+    void PostProcessHeightMap(HeightMapThreadInfo info)
+    {
+        float[,] heightMap = info.heightMap;
+        for(int i = 0; i < paths.Count; i ++)
+        {
+            Vector2Int point = paths[i];
+            PostProcessPath(heightMap, point.x, point.y, 0);
+        }
+    }
+
     void Update() {
         // Process height map data
         if (heightMapDataThreadInfoQueue.Count > 0) {
             for (int i = 0; i < heightMapDataThreadInfoQueue.Count; i++) {
                 HeightMapThreadInfo info = heightMapDataThreadInfoQueue.Dequeue();
+                PostProcessHeightMap(info);
                 MeshGenerator.RequestMeshData(info.position, info.heightMap, levelOfDetail, OnTerrainMeshDataReceived, terrainColourGradient);
             }
         }
