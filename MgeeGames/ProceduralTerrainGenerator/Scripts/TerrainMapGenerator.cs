@@ -308,7 +308,7 @@ public class TerrainMapGenerator : MonoBehaviour {
 
         //以x,y为中心，向周围扩展offset个单位，采样并设置高度
         int sample = 3;
-        offset = Mathf.Min(offset, 4);
+        offset = Mathf.Max(offset / 2, 4);
         for(int i = -offset; i <= offset; i++)
         {
             for(int j = -offset; j <= offset; j++)
@@ -359,7 +359,7 @@ public class TerrainMapGenerator : MonoBehaviour {
         while(iter.MoveNext())
         {
             long key = iter.Current;
-            PostProcessPath(heightMap, (int)(key / width), (int)(key % width), 0, paths);
+            PostProcessPath(heightMap, (int)(key / width), (int)(key % width), 0.5f, paths);
         }
     }
 
