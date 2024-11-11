@@ -55,21 +55,21 @@ public class HeightMapGenerator : MonoBehaviour {
         }
     }
 
-    public void RequestHeightMapData(int seed, int mapWidth, int mapHeight, Vector2 position, Action<Vector2, float[,]> callback) {
+    public void RequestHeightMapData(int seed, int mapWidth, int mapHeight, Vector2 position, HashSet<long> paths, Action<Vector2, float[,], HashSet<long>> callback) {
         ThreadStart threadStart = delegate {
-            HeightMapDataThread(seed, mapWidth, mapHeight, position, callback);
+            HeightMapDataThread(seed, mapWidth, mapHeight, position, paths, callback);
         };
 
         new Thread(threadStart).Start();
     }
 
-    void HeightMapDataThread(int seed, int mapWidth, int mapHeight, Vector2 position, Action<Vector2, float[,]> callback) {
+    void HeightMapDataThread(int seed, int mapWidth, int mapHeight, Vector2 position, HashSet<long> paths, Action<Vector2, float[,], HashSet<long>> callback) {
         int mapOffsetX = (int)(position.x * (mapWidth - 1)) + seed;
         int mapOffsetY = (int)(position.y * (mapHeight - 1)) + seed;
 
         float[,] heightMap = CreateHeightMap(seed, mapWidth, mapHeight, mapOffsetX, mapOffsetY);
 
-        callback(position, heightMap);
+        callback(position, heightMap, paths);
     }
 
     float[,] CreateHeightMap(int seed, int mapWidth, int mapHeight, int offsetX, int offsetY) {
@@ -161,8 +161,10 @@ public class HeightMapGenerator : MonoBehaviour {
 public class HeightMapThreadInfo {
     public Vector2 position;
     public float[,] heightMap;
+    public HashSet<long> paths;
 
-    public HeightMapThreadInfo(Vector2 position, float[,] heightMap) {
+    public HeightMapThreadInfo(Vector2 position, float[,] heightMap, HashSet<long> paths) {
+        this.paths = paths;
         this.position = position;
         this.heightMap = heightMap;
     }

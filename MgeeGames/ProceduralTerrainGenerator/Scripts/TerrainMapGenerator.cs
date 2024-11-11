@@ -1,10 +1,9 @@
-using System.Collections;
-using System.Collections.Generic;
-using System.Threading;
 using System;
+using System.IO;
 using UnityEngine;
 using UnityEditor;
-using Unity.Mathematics;
+using Newtonsoft.Json.Linq;
+using System.Collections.Generic;
 
 [ExecuteInEditMode]
 public class TerrainMapGenerator : MonoBehaviour {
@@ -55,11 +54,12 @@ public class TerrainMapGenerator : MonoBehaviour {
     ForestGenerator forestGenerator;
     HydraulicErosion hydraulicErosion;
 
-
     Dictionary<Vector2, GameObject> terrainChunks = new Dictionary<Vector2, GameObject>();
 
     Queue<HeightMapThreadInfo> heightMapDataThreadInfoQueue = new Queue<HeightMapThreadInfo>();
     Queue<MeshDataThreadInfo> meshDataThreadInfoQueue = new Queue<MeshDataThreadInfo>();
+
+    Dictionary<int, Dictionary<string, int>> IDmap = new Dictionary<int, Dictionary<string, int>>();
 
 #if UNITY_EDITOR
     void OnEnable() {
@@ -71,8 +71,173 @@ public class TerrainMapGenerator : MonoBehaviour {
     }
 #endif
 
-    void Start() {
-        // Get all Terrain Chunks
+    Dictionary<int, int> IDConvert = new Dictionary<int, int>();
+    int TransformID(int id)
+    {
+        if (IDConvert.TryGetValue(id, out int result))
+        {
+            return result;
+        }
+        return id;
+    }
+
+    int IDMapSize
+    {
+        get
+        {
+            return IDmap.Count;
+        }
+    }
+
+    class TileSet
+    {
+        public int firstgid;
+        public int tilecount;
+        public string source;
+    }
+
+    void UpdateTileSetMap(JArray array)
+    {
+        IDConvert.Clear();
+        List<TileSet> list = new List<TileSet>();
+        foreach (var item in array)
+        {
+            string source = item["source"].ToString();
+            source = Path.GetFileNameWithoutExtension(source);
+            int firstgid = int.Parse(item["firstgid"].ToString());
+            list.Add(new TileSet { firstgid = firstgid, source = source });
+        }
+        list.Sort((a, b) => a.firstgid - b.firstgid);
+        Dictionary<string,TileSet> tileset = new Dictionary<string, TileSet>();
+        for(int i = 0; i < list.Count; ++i)
+        {
+            var item = list[i];
+            if(i + 1 < list.Count)
+            {
+                item.tilecount = list[i + 1].firstgid - item.firstgid;
+            }
+            else
+            {
+                item.tilecount = int.MaxValue;
+            }
+            tileset.Add(item.source, item);
+        }
+
+        var iter = IDmap.GetEnumerator();
+        while(iter.MoveNext())
+        {
+            bool found = false;
+            int id = iter.Current.Key;
+            var setMap = iter.Current.Value;
+            var setIter = setMap.GetEnumerator();
+            while(setIter.MoveNext())
+            {
+                string name = setIter.Current.Key;
+                int itemID = setIter.Current.Value;
+                if(tileset.TryGetValue(name, out TileSet tile) && tile.tilecount > itemID)
+                {
+                    found = true;
+                    IDConvert[tile.firstgid + itemID] = id;
+                    break;
+                }
+            }
+
+            if(!found)
+            {
+                Debug.LogWarning("Can't find tileset for id " + id);
+            }
+        }
+    }
+
+    void InitIDMap(string text)
+    {
+        IDmap.Clear();
+        var dict = JObject.Parse(text) as JObject;
+        if (dict == null)
+        {
+            return;
+        }
+        
+        foreach(var item in dict)
+        {
+            int id = int.Parse(item.Key);
+            JObject sets = item.Value as JObject;
+            //遍历sets
+            Dictionary<string, int> setMap = new Dictionary<string, int>();
+            foreach (var set in sets)
+            {
+                string key = set.Key;
+                setMap[key] = int.Parse(set.Value.ToString());
+            }
+            IDmap[id] = setMap;
+        }
+    }
+
+    void LoadTileMap(string path, out HashSet<long> paths, out int mapWidth, out int mapHeight)
+    {
+        mapWidth = 0;
+        mapHeight = 0;
+        paths = new HashSet<long>();
+        if(string.IsNullOrEmpty(path))
+        {
+            return;
+        }
+        JObject tilemap = JObject.Parse(File.ReadAllText(path));
+        UpdateTileSetMap(tilemap["tilesets"] as JArray);
+
+        mapWidth = (int)(tilemap["width"]);
+		mapHeight = (int)(tilemap["height"]);
+        var layerData = tilemap["layers"];
+        Dictionary<long, int> canpass_dict = new Dictionary<long, int>();
+        foreach (var layer in layerData)
+        {
+            if((string)(layer["type"]) == "tilelayer")
+            {
+                int pos = 0;
+                var layerName = (string)(layer["name"]);
+                var layerDataArray = (JArray)(layer["data"]);
+                foreach (var item in layerDataArray)
+                {
+                    canpass_dict.TryGetValue(pos, out int canPass);
+                    int id = TransformID((int)item);
+                    if(id == 0)
+                    {
+                        canPass |= 1;
+                    }
+                    else if(id >= 101 && id <= 105 || id >= 301 && id <= 303)
+                    {
+                        canPass |= 2;
+                    }
+                    else if(id >= 110 && id <= 199)
+                    {
+                        canPass |= 4;
+                    }
+                    canpass_dict[pos++] = canPass;
+                }
+            }
+        }
+
+        var iter = canpass_dict.GetEnumerator();
+        while(iter.MoveNext())
+        {
+            long pos = iter.Current.Key;
+            int canPass = iter.Current.Value;
+            if(canPass == 1 || ((canPass & 4) == 4))
+            {
+                //不可通行
+            }
+            else
+            {
+                paths.Add(pos);
+            }
+        }
+    }
+
+    void Initialize() {
+        heightMapGenerator = GetComponent<HeightMapGenerator>();
+        forestGenerator = GetComponent<ForestGenerator>();
+        hydraulicErosion = GetComponent<HydraulicErosion>();
+
         foreach (Transform child in transform) {
             Vector2 position = new Vector2(child.position.x / chunkWidth, child.position.z / chunkWidth);
             if (!terrainChunks.ContainsKey(position)) {
@@ -93,6 +258,8 @@ public class TerrainMapGenerator : MonoBehaviour {
         }
 
         forestGenerator.Init(trees, viewer, objectViewRange);
+
+        InitIDMap(System.IO.File.ReadAllText("Assets/Resources/map/idmap.json"));
     }
 
     void OnValidate() {
@@ -128,7 +295,7 @@ public class TerrainMapGenerator : MonoBehaviour {
         }
     }
 
-    void PostProcessPath(float[,] heightMap, int x, int y, float value, Dictionary<long, bool> paths)
+    void PostProcessPath(float[,] heightMap, int x, int y, float value, HashSet<long> paths)
     {
         int width = heightMap.GetLength(0);
         int height = heightMap.GetLength(1);
@@ -141,6 +308,7 @@ public class TerrainMapGenerator : MonoBehaviour {
 
         //以x,y为中心，向周围扩展offset个单位，采样并设置高度
         int sample = 3;
+        offset = Mathf.Min(offset, 4);
         for(int i = -offset; i <= offset; i++)
         {
             for(int j = -offset; j <= offset; j++)
@@ -151,7 +319,7 @@ public class TerrainMapGenerator : MonoBehaviour {
                 {
                     continue;
                 }
-                if(paths.ContainsKey(nx * width + ny))
+                if(paths.Contains(nx * width + ny))
                 {
                     continue;
                 }
@@ -176,8 +344,9 @@ public class TerrainMapGenerator : MonoBehaviour {
         }
     }
 
-    void PostProcessHeightMap(HeightMapThreadInfo info, Dictionary<long, bool> paths)
+    void PostProcessHeightMap(HeightMapThreadInfo info)
     {
+        HashSet<long> paths = info.paths;
         if(paths == null || paths.Count == 0)
         {
             return;
@@ -189,7 +358,7 @@ public class TerrainMapGenerator : MonoBehaviour {
         var iter = paths.GetEnumerator();
         while(iter.MoveNext())
         {
-            long key = iter.Current.Key;
+            long key = iter.Current;
             PostProcessPath(heightMap, (int)(key / width), (int)(key % width), 0, paths);
         }
     }
@@ -199,7 +368,7 @@ public class TerrainMapGenerator : MonoBehaviour {
         if (heightMapDataThreadInfoQueue.Count > 0) {
             for (int i = 0; i < heightMapDataThreadInfoQueue.Count; i++) {
                 HeightMapThreadInfo info = heightMapDataThreadInfoQueue.Dequeue();
-                PostProcessHeightMap(info, null);
+                PostProcessHeightMap(info);
                 MeshGenerator.RequestMeshData(info.position, info.heightMap, levelOfDetail, OnTerrainMeshDataReceived, terrainColourGradient);
             }
         }
@@ -249,7 +418,44 @@ public class TerrainMapGenerator : MonoBehaviour {
 
     public void Generate(bool loadAllObjects=false) {
         // Generate grid of chunks
-        CreateChunkGrid(loadAllObjects);
+        Initialize();
+        LoadTileMap("Assets/Resources/map/maincity_0.json", out HashSet<long> paths, out int mapWidth, out int mapHeight);
+        //把地图尺寸放大scale倍
+        int scale = 1;
+        const int maxSide = 100;
+        int sideMax = Mathf.Max(mapWidth, mapHeight);
+        if(sideMax > maxSide)
+        {
+            scale = 1;
+        }
+        else
+        {
+            scale = maxSide / sideMax;
+        }
+
+        HashSet<long> newPaths = paths;
+        int newWidth = mapWidth * scale;
+        int newHeight = mapHeight * scale;
+        if(scale > 1)
+        {
+            newPaths = new HashSet<long>();
+            foreach(var path in paths)
+            {
+                long pos = path;
+                int x = (int)(pos / mapWidth);
+                int y = (int)(pos % mapWidth);
+                int newx = x * scale;
+                int newy = y * scale;
+                for(int i = 0; i < scale; i++)
+                {
+                    for(int j = 0; j < scale; j++)
+                    {
+                        newPaths.Add((newx + i) * newWidth + newy + j);
+                    }
+                }
+            }
+        }
+        CreateChunkGrid(newWidth, newHeight, newPaths);
     }
 
     public void Clear() {
@@ -295,7 +501,7 @@ public class TerrainMapGenerator : MonoBehaviour {
         }
     }
 
-    void CreateChunkGrid(bool loadAllObjects) {
+    void CreateChunkGrid(int mapWidth, int mapHeight, HashSet<long> paths) {
         int w = (int)Mathf.Round(chunkGridWidth / 2);
         for (int x = -w; x <= w; x++) {
             for (int y = -w; y <= w; y++) {
@@ -304,7 +510,7 @@ public class TerrainMapGenerator : MonoBehaviour {
 
                 chunk.isStatic = true;
                 chunk.transform.parent = transform;
-                chunk.transform.position = new Vector3(pos.x * (chunkWidth - 1), 0f, -pos.y * (chunkWidth - 1));
+                chunk.transform.position = new Vector3(pos.x * (mapWidth - 1), 0f, -pos.y * (mapHeight - 1));
 
                 if (terrainChunks.ContainsKey(pos)) {
                     DestroyImmediate(terrainChunks[pos], true);
@@ -314,13 +520,13 @@ public class TerrainMapGenerator : MonoBehaviour {
                     terrainChunks.Add(pos, chunk);
                 }
 
-                RequestTerrainChunk(pos, chunkWidth + 200, chunkWidth);
+                RequestTerrainChunk(pos, mapWidth, mapHeight, paths);
             }
         }
     }
 
-    void RequestTerrainChunk(Vector2 position, int mapWidth, int mapHeight) {
-        heightMapGenerator.RequestHeightMapData(seed, mapWidth, mapHeight, position, OnHeightMapDataReceived);
+    void RequestTerrainChunk(Vector2 position, int mapWidth, int mapHeight, HashSet<long> paths) {
+        heightMapGenerator.RequestHeightMapData(seed, mapWidth, mapHeight, position, paths, OnHeightMapDataReceived);
 
         if (createWater) {
             float[,] heightMap = new float[mapWidth, mapHeight];
@@ -344,9 +550,9 @@ public class TerrainMapGenerator : MonoBehaviour {
         return forestGameObject;
     }
 
-    void OnHeightMapDataReceived(Vector2 position, float[,] heightMap) {
+    void OnHeightMapDataReceived(Vector2 position, float[,] heightMap, HashSet<long> paths) {
         lock (heightMapDataThreadInfoQueue) {
-            heightMapDataThreadInfoQueue.Enqueue(new HeightMapThreadInfo(position, heightMap));
+            heightMapDataThreadInfoQueue.Enqueue(new HeightMapThreadInfo(position, heightMap, paths));
         }
     }
 
